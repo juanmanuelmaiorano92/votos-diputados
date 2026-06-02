@@ -8,7 +8,7 @@
 
 ## ¿Qué hace este proyecto?
 
-LegisTrack es un sistema de predicción que, dado el texto de un proyecto de ley hipotético, estima cómo votaría cada uno de los diputados activos de la Cámara de Diputados de la Nación Argentina.
+LegisTrack es un sistema de predicción que, dado el texto de un proyecto de ley hipotético y quién sería el autor de dicho proyecto, estima cómo votaría cada uno de los diputados activos de la Cámara de Diputados de la Nación Argentina.
 
 El usuario ingresa el título o descripción de una ley imaginaria y el sistema devuelve una predicción por diputado (AFIRMATIVO, NEGATIVO o ABSTENCIÓN), junto con una estimación de si el proyecto lograría o no la mayoría simple necesaria para su aprobación.
 
@@ -26,7 +26,7 @@ El usuario ingresa el título o descripción de una ley imaginaria y el sistema 
 ```
 Datos crudos
     │
-    ├── STG 1 — Recolección y carga
+    ├── STG 1 — Scraping
     │
     ├── STG 2 — Transformación y limpieza
     │       ├── Eliminación de ruido procedimental
