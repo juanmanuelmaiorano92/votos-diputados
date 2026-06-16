@@ -1,12 +1,53 @@
-import streamlit as st
+import base64
+from pathlib import Path
+
 import pandas as pd
+import streamlit as st
+
+
+def _inyectar_fondo():
+    ruta = Path(__file__).parent / "assets" / "fondo_combinado.jpg"
+    if not ruta.exists():
+        return
+    datos = base64.b64encode(ruta.read_bytes()).decode()
+    st.markdown(
+        f"""
+        <style>
+        .stApp {{
+            background-image: url("data:image/jpeg;base64,{datos}");
+            background-size: 100% auto;
+            background-position: top center;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+        }}
+        /* Panel frosted-glass sobre el contenido */
+        .block-container {{
+            background-color: rgba(5, 10, 30, 0.55);
+            border-radius: 14px;
+            padding: 2rem 2.5rem !important;
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+        }}
+        /* Texto blanco en toda la app */
+        html, body, [class*="css"] {{
+            color: #f0f0f0;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+_inyectar_fondo()
 
 st.title("LegisTrack — Predictor de Votaciones")
 st.write("Consultá el historial de votaciones de un diputado y próximamente su predicción de voto.")
 
+
 @st.cache_data
 def cargar_datos():
     return pd.read_csv("data/df_consolidado.csv", parse_dates=["fecha_votacion"])
+
 
 df = cargar_datos()
 
