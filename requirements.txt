@@ -1,3 +1,4 @@
 pandas
 streamlit
 sentence-transformers
+Pillow>=10.0
