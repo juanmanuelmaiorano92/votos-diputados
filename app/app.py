@@ -1,8 +1,13 @@
 import base64
+import os
 from pathlib import Path
+from urllib.parse import quote
 
 import pandas as pd
+import requests
 import streamlit as st
+
+API_BASE_URL = os.environ.get("LEGISTRACK_API_URL", "http://127.0.0.1:8000")
 
 
 def _inyectar_fondo():
@@ -45,40 +50,100 @@ st.write("Consultá el historial de votaciones de un diputado y próximamente su
 
 
 @st.cache_data
-def cargar_datos():
-    return pd.read_csv("data/df_consolidado.csv", parse_dates=["fecha_votacion"])
+def listar_diputados():
+    r = requests.get(f"{API_BASE_URL}/diputados", timeout=10)
+    r.raise_for_status()
+    return sorted(r.json())
 
 
-df = cargar_datos()
+@st.cache_data
+def consultar_historial(nombre):
+    r = requests.get(f"{API_BASE_URL}/diputados/{quote(nombre, safe='')}", timeout=10)
+    if r.status_code == 404:
+        return None
+    r.raise_for_status()
+    return r.json()
 
-diputados = sorted(df["diputado"].unique())
+
+def predecir_votos(titulo):
+    r = requests.post(f"{API_BASE_URL}/predecir", json={"titulo": titulo}, timeout=30)
+    if r.status_code == 422:
+        return None
+    r.raise_for_status()
+    return r.json()
+
+
+try:
+    diputados = listar_diputados()
+except requests.exceptions.RequestException:
+    st.error(
+        f"No se pudo conectar con la API en {API_BASE_URL}. "
+        "Verificá que este corriendo (`uvicorn api.main:app`)."
+    )
+    st.stop()
 
 diputado_sel = st.selectbox("Diputado", diputados)
 
 if st.button("Consultar"):
-    df_diputado = df[df["diputado"] == diputado_sel]
+    try:
+        historial = consultar_historial(diputado_sel)
+    except requests.exceptions.RequestException:
+        st.error(f"No se pudo conectar con la API en {API_BASE_URL}.")
+        st.stop()
 
-    bloque = df_diputado["bloque"].iloc[0]
-    provincia = df_diputado["provincia"].iloc[0]
-    conteo = df_diputado["voto"].value_counts()
+    if historial is None:
+        st.error(f"No se encontró historial para {diputado_sel}.")
+        st.stop()
+
+    conteo = historial["conteo_votos"]
 
     st.subheader(f"Datos de {diputado_sel}")
-    st.write(f"**Bloque:** {bloque}")
-    st.write(f"**Provincia:** {provincia}")
-    st.write(f"**Votos registrados:** AFIRMATIVO {conteo.get('AFIRMATIVO', 0)} | NEGATIVO {conteo.get('NEGATIVO', 0)} | ABSTENCIÓN {conteo.get('ABSTENCION', conteo.get('ABSTENCIÓN', 0))}")
+    st.write(f"**Bloque:** {historial['bloque']}")
+    st.write(f"**Provincia:** {historial['provincia']}")
+    st.write(
+        f"**Votos registrados:** AFIRMATIVO {conteo['AFIRMATIVO']} | "
+        f"NEGATIVO {conteo['NEGATIVO']} | ABSTENCIÓN {conteo['ABSTENCION']}"
+    )
 
     st.subheader("Últimas 10 votaciones")
-    ultimas = (
-        df_diputado
-        .sort_values("fecha_votacion", ascending=False)
-        .head(10)[["titulo_base", "fecha_votacion", "voto"]]
-        .copy()
-    )
-    ultimas["titulo_base"] = ultimas["titulo_base"].str[:80]
+    ultimas = pd.DataFrame(historial["ultimas_votaciones"])
+    ultimas["titulo"] = ultimas["titulo"].str[:80]
+    ultimas["fecha"] = pd.to_datetime(ultimas["fecha"]).dt.strftime("%d/%m/%Y")
     ultimas.columns = ["Proyecto", "Fecha", "Voto"]
-    ultimas["Fecha"] = ultimas["Fecha"].dt.strftime("%d/%m/%Y")
     st.dataframe(ultimas, hide_index=True)
 
-    st.divider()
-    st.write("**Predicción de voto:**")
-    st.write("Próximamente podrás ingresar el texto de un proyecto de ley, indicar su autor y ver cómo votaría cada uno de los 257 diputados.")
+st.divider()
+st.subheader("Predicción de voto")
+st.write("Ingresá el título de un proyecto de ley para ver cómo votaría cada diputado.")
+
+with st.form("form_prediccion"):
+    titulo_ley = st.text_area("Título del proyecto de ley", height=100)
+    enviar_prediccion = st.form_submit_button("Predecir")
+
+if enviar_prediccion:
+    if not titulo_ley.strip():
+        st.warning("Ingresá un título antes de predecir.")
+        st.stop()
+
+    try:
+        resultado = predecir_votos(titulo_ley)
+    except requests.exceptions.RequestException:
+        st.error(f"No se pudo conectar con la API en {API_BASE_URL}.")
+        st.stop()
+
+    if resultado is None:
+        st.warning("Ingresá un título antes de predecir.")
+        st.stop()
+
+    st.write(f"**Tema detectado:** {resultado['tema_asignado']}")
+
+    predicciones = pd.DataFrame(resultado["predicciones"])
+    conteo_pred = predicciones["voto_predicho"].value_counts()
+    st.write(
+        f"**Distribución de la predicción:** AFIRMATIVO {conteo_pred.get('AFIRMATIVO', 0)} | "
+        f"NEGATIVO {conteo_pred.get('NEGATIVO', 0)} | "
+        f"ABSTENCIÓN {conteo_pred.get('ABSTENCION', conteo_pred.get('ABSTENCIÓN', 0))}"
+    )
+
+    predicciones.columns = ["Diputado", "Bloque", "Voto predicho"]
+    st.dataframe(predicciones, hide_index=True)
