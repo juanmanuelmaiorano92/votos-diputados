@@ -1,14 +1,15 @@
 from fastapi import APIRouter, HTTPException
 
 from api import database as db
-from api.schemas import DiputadoHistorial
+from api.schemas import DiputadoHistorial, DiputadoResumen
 
 router = APIRouter(prefix="/diputados", tags=["diputados"])
 
 
-@router.get("", response_model=list[str])
+@router.get("", response_model=list[DiputadoResumen])
 def listar_diputados():
-    """Lista de nombres de diputados, para poblar el selector de la app sin leer el CSV."""
+    """Nombre y bloque actual de los 257 diputados, para poblar los selectores de la app
+    sin leer el CSV."""
     return db.listar_diputados()
 
 

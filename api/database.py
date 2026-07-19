@@ -12,43 +12,68 @@ def cargar_consolidado() -> pd.DataFrame:
 
 
 @lru_cache(maxsize=1)
-def cargar_snapshot_diputado() -> pd.DataFrame:
-    return pd.read_csv(DATA_DIR / "snapshot_diputado.csv")
+def cargar_snapshot_diputado_autor() -> pd.DataFrame:
+    """Snapshot de STG_8.2 (spec 014): tasas historicas por diputado, 257 personas
+    (historial de grafias duplicadas combinado, ver Osuna/Pichetto)."""
+    return pd.read_csv(DATA_DIR / "snapshot_diputado_autor.csv")
 
 
 @lru_cache(maxsize=1)
-def cargar_snapshot_diputado_tema() -> pd.DataFrame:
-    return pd.read_csv(DATA_DIR / "snapshot_diputado_tema.csv")
+def cargar_snapshot_diputado_tema_autor() -> pd.DataFrame:
+    return pd.read_csv(DATA_DIR / "snapshot_diputado_tema_autor.csv")
 
 
 @lru_cache(maxsize=1)
-def cargar_snapshot_bloque_tema() -> pd.DataFrame:
-    return pd.read_csv(DATA_DIR / "snapshot_bloque_tema.csv")
+def cargar_snapshot_bloque_tema_autor() -> pd.DataFrame:
+    return pd.read_csv(DATA_DIR / "snapshot_bloque_tema_autor.csv")
 
 
-def listar_diputados() -> list[str]:
-    return sorted(cargar_snapshot_diputado()["diputado"].unique())
+@lru_cache(maxsize=1)
+def cargar_nomina() -> pd.DataFrame:
+    """Nomina canonica de 257 diputados (spec 014, STG_8.2): un nombre canonico por
+    persona, con sus grafias historicas absorbidas (ver caso Osuna/Pichetto, que hoy
+    aparecen con dos grafias distintas en el historico crudo)."""
+    df = pd.read_csv(DATA_DIR / "nomina_diputados.csv")
+    df["grafias_historicas"] = df["grafias_historicas"].str.split(";")
+    return df
+
+
+def listar_diputados() -> list[dict]:
+    """Nombre y bloque actual de los 257 diputados, para poblar tanto el selector de
+    historial como el selector de autor de la app (que muestra el bloque junto al nombre)."""
+    nomina = cargar_nomina().sort_values("diputado")
+    return [
+        {"diputado": fila.diputado, "bloque": fila.bloque_actual}
+        for fila in nomina.itertuples()
+    ]
 
 
 def obtener_historial_diputado(nombre: str) -> dict | None:
-    """Devuelve bloque, provincia, conteo de votos y ultimas 10 votaciones de un diputado.
-    None si el nombre no existe en el historial."""
-    df = cargar_consolidado()
-    df_dip = df[df["diputado"] == nombre]
-    if df_dip.empty:
+    """Devuelve bloque, provincia, conteo de votos y ultimas 10 votaciones de un diputado
+    (nombre canonico, el que devuelve listar_diputados()). El historial combina TODAS las
+    grafias historicas de esa persona (ver nomina_diputados.csv), asi Osuna y Pichetto -que
+    en el CSV crudo aparecen repartidos en dos nombres distintos- muestran su historial
+    completo en una sola respuesta. None si el nombre no existe en la nomina."""
+    nomina = cargar_nomina()
+    fila_nomina = nomina[nomina["diputado"] == nombre]
+    if fila_nomina.empty:
         return None
+    fila_nomina = fila_nomina.iloc[0]
+
+    df = cargar_consolidado()
+    df_dip = df[df["diputado"].isin(fila_nomina["grafias_historicas"])]
 
     conteo = df_dip["voto"].value_counts()
     df_dip_desc = df_dip.sort_values("fecha_votacion", ascending=False)
     ultimas = df_dip_desc.head(10)[["titulo_base", "fecha_votacion", "voto"]]
 
-    # Bloque/provincia del voto MAS RECIENTE (no el primero del CSV, que no esta
-    # ordenado por fecha) -- algunos diputados cambiaron de bloque, y esto debe
-    # coincidir con el criterio de snapshot_diputado.csv (usado en /predecir).
+    # Bloque/provincia actuales: los de la nomina (spec 014), no el voto mas reciente
+    # calculado en el momento -- ya verificados contra diputados_actuales.csv en STG_8.2 T3,
+    # y es el mismo criterio que usa /predecir (snapshot_diputado_autor.csv).
     return {
         "diputado": nombre,
-        "bloque": df_dip_desc["bloque"].iloc[0],
-        "provincia": df_dip_desc["provincia"].iloc[0],
+        "bloque": fila_nomina["bloque_actual"],
+        "provincia": fila_nomina["provincia_actual"],
         "conteo_votos": {
             "AFIRMATIVO": int(conteo.get("AFIRMATIVO", 0)),
             "NEGATIVO": int(conteo.get("NEGATIVO", 0)),

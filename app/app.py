@@ -49,11 +49,15 @@ st.title("LegisTrack — Predictor de Votaciones")
 st.write("Consultá el historial de votaciones de un diputado y próximamente su predicción de voto.")
 
 
+AUTOR_PODER_EJECUTIVO = "Poder Ejecutivo Nacional"
+
+
 @st.cache_data
 def listar_diputados():
+    """Nombre y bloque actual de los 257 diputados (ordenados por nombre)."""
     r = requests.get(f"{API_BASE_URL}/diputados", timeout=10)
     r.raise_for_status()
-    return sorted(r.json())
+    return sorted(r.json(), key=lambda d: d["diputado"])
 
 
 @st.cache_data
@@ -65,8 +69,10 @@ def consultar_historial(nombre):
     return r.json()
 
 
-def predecir_votos(titulo):
-    r = requests.post(f"{API_BASE_URL}/predecir", json={"titulo": titulo}, timeout=30)
+def predecir_votos(titulo, autor):
+    r = requests.post(
+        f"{API_BASE_URL}/predecir", json={"titulo": titulo, "autor": autor}, timeout=30
+    )
     if r.status_code == 422:
         return None
     r.raise_for_status()
@@ -82,7 +88,8 @@ except requests.exceptions.RequestException:
     )
     st.stop()
 
-diputado_sel = st.selectbox("Diputado", diputados)
+nombres_diputados = [d["diputado"] for d in diputados]
+diputado_sel = st.selectbox("Diputado", nombres_diputados)
 
 if st.button("Consultar"):
     try:
@@ -114,10 +121,22 @@ if st.button("Consultar"):
 
 st.divider()
 st.subheader("Predicción de voto")
-st.write("Ingresá el título de un proyecto de ley para ver cómo votaría cada diputado.")
+st.write(
+    "Ingresá el título de un proyecto de ley y quién lo firma para ver cómo votaría "
+    "cada diputado."
+)
+
+# Opciones del selector de autor: el Poder Ejecutivo primero, despues los 257 diputados
+# actuales identificados con su bloque vigente (para poder encontrarlos facil). El valor
+# que se envia a la API es siempre el nombre canonico -- se guarda en un diccionario
+# etiqueta -> nombre para traducir la seleccion.
+opciones_autor = {AUTOR_PODER_EJECUTIVO: AUTOR_PODER_EJECUTIVO}
+for d in diputados:
+    opciones_autor[f"{d['diputado']} ({d['bloque']})"] = d["diputado"]
 
 with st.form("form_prediccion"):
     titulo_ley = st.text_area("Título del proyecto de ley", height=100)
+    autor_etiqueta = st.selectbox("Autor del proyecto", list(opciones_autor.keys()))
     enviar_prediccion = st.form_submit_button("Predecir")
 
 if enviar_prediccion:
@@ -125,8 +144,10 @@ if enviar_prediccion:
         st.warning("Ingresá un título antes de predecir.")
         st.stop()
 
+    autor_sel = opciones_autor[autor_etiqueta]
+
     try:
-        resultado = predecir_votos(titulo_ley)
+        resultado = predecir_votos(titulo_ley, autor_sel)
     except requests.exceptions.RequestException:
         st.error(f"No se pudo conectar con la API en {API_BASE_URL}.")
         st.stop()
@@ -135,6 +156,7 @@ if enviar_prediccion:
         st.warning("Ingresá un título antes de predecir.")
         st.stop()
 
+    st.write(f"**Autor:** {resultado['autor']} — **Bloque asignado:** {resultado['bloque_autor']}")
     st.write(f"**Tema detectado:** {resultado['tema_asignado']}")
 
     predicciones = pd.DataFrame(resultado["predicciones"])
