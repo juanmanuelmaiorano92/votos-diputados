@@ -52,17 +52,97 @@ st.write("Consultá el historial de votaciones de un diputado y próximamente su
 AUTOR_PODER_EJECUTIVO = "Poder Ejecutivo Nacional"
 
 
-@st.cache_data
-def listar_diputados():
+def _pantalla_login():
+    """Sin sesion iniciada, la app no muestra nada mas que esto (login/registro)."""
+    tab_login, tab_registro = st.tabs(["Iniciar sesión", "Registrarse"])
+
+    with tab_login:
+        with st.form("form_login"):
+            username = st.text_input("Usuario", key="login_username")
+            password = st.text_input("Contraseña", type="password", key="login_password")
+            enviar = st.form_submit_button("Ingresar")
+        if enviar:
+            try:
+                r = requests.post(
+                    f"{API_BASE_URL}/login",
+                    json={"username": username, "password": password},
+                    timeout=10,
+                )
+            except requests.exceptions.RequestException:
+                st.error(f"No se pudo conectar con la API en {API_BASE_URL}.")
+                return
+            if r.status_code == 401:
+                st.error("Usuario o contraseña incorrectos.")
+                return
+            r.raise_for_status()
+            st.session_state["token"] = r.json()["access_token"]
+            st.session_state["username"] = username
+            st.rerun()
+
+    with tab_registro:
+        with st.form("form_registro"):
+            username_r = st.text_input("Elegí un usuario", key="registro_username")
+            password_r = st.text_input(
+                "Elegí una contraseña (mínimo 6 caracteres)",
+                type="password",
+                key="registro_password",
+            )
+            enviar_r = st.form_submit_button("Crear cuenta")
+        if enviar_r:
+            try:
+                r = requests.post(
+                    f"{API_BASE_URL}/registro",
+                    json={"username": username_r, "password": password_r},
+                    timeout=10,
+                )
+            except requests.exceptions.RequestException:
+                st.error(f"No se pudo conectar con la API en {API_BASE_URL}.")
+                return
+            if r.status_code == 400:
+                st.error("Ese nombre de usuario ya existe.")
+                return
+            if r.status_code == 422:
+                st.error(f"Datos inválidos: {r.json().get('detail')}")
+                return
+            r.raise_for_status()
+            st.success("Cuenta creada. Ahora podés iniciar sesión en la pestaña de al lado.")
+
+
+if "token" not in st.session_state:
+    _pantalla_login()
+    st.stop()
+
+
+def _headers_auth():
+    return {"Authorization": f"Bearer {st.session_state['token']}"}
+
+
+col_sesion, col_logout = st.columns([4, 1])
+with col_sesion:
+    st.write(f"Sesión iniciada como **{st.session_state['username']}**")
+with col_logout:
+    if st.button("Cerrar sesión"):
+        del st.session_state["token"]
+        del st.session_state["username"]
+        st.rerun()
+
+
+# ttl acotado (bien por debajo de las 12hs de vencimiento del token): el header no
+# forma parte de la clave de cache (no es hasheable), asi que sin un ttl el dato queda
+# cacheado para siempre y nunca se vuelve a validar el token contra la API.
+@st.cache_data(ttl=1800)
+def listar_diputados(_headers):
     """Nombre y bloque actual de los 257 diputados (ordenados por nombre)."""
-    r = requests.get(f"{API_BASE_URL}/diputados", timeout=10)
+    r = requests.get(f"{API_BASE_URL}/diputados", headers=_headers, timeout=10)
     r.raise_for_status()
     return sorted(r.json(), key=lambda d: d["diputado"])
 
 
-@st.cache_data
-def consultar_historial(nombre):
-    r = requests.get(f"{API_BASE_URL}/diputados/{quote(nombre, safe='')}", timeout=10)
+@st.cache_data(ttl=1800)
+def consultar_historial(nombre, _headers):
+    r = requests.get(
+        f"{API_BASE_URL}/diputados/{quote(nombre, safe='')}", headers=_headers, timeout=10
+    )
     if r.status_code == 404:
         return None
     r.raise_for_status()
@@ -71,7 +151,10 @@ def consultar_historial(nombre):
 
 def predecir_votos(titulo, autor):
     r = requests.post(
-        f"{API_BASE_URL}/predecir", json={"titulo": titulo, "autor": autor}, timeout=30
+        f"{API_BASE_URL}/predecir",
+        json={"titulo": titulo, "autor": autor},
+        headers=_headers_auth(),
+        timeout=30,
     )
     if r.status_code == 422:
         return None
@@ -80,7 +163,7 @@ def predecir_votos(titulo, autor):
 
 
 try:
-    diputados = listar_diputados()
+    diputados = listar_diputados(_headers_auth())
 except requests.exceptions.RequestException:
     st.error(
         f"No se pudo conectar con la API en {API_BASE_URL}. "
@@ -93,7 +176,7 @@ diputado_sel = st.selectbox("Diputado", nombres_diputados)
 
 if st.button("Consultar"):
     try:
-        historial = consultar_historial(diputado_sel)
+        historial = consultar_historial(diputado_sel, _headers_auth())
     except requests.exceptions.RequestException:
         st.error(f"No se pudo conectar con la API en {API_BASE_URL}.")
         st.stop()
@@ -169,3 +252,34 @@ if enviar_prediccion:
 
     predicciones.columns = ["Diputado", "Bloque", "Voto predicho"]
     st.dataframe(predicciones, hide_index=True)
+
+st.divider()
+st.subheader("Mis predicciones")
+
+
+def obtener_mis_predicciones():
+    r = requests.get(f"{API_BASE_URL}/mis-predicciones", headers=_headers_auth(), timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
+try:
+    mis_predicciones = obtener_mis_predicciones()
+except requests.exceptions.RequestException:
+    st.error(f"No se pudo conectar con la API en {API_BASE_URL}.")
+else:
+    if not mis_predicciones:
+        st.write("Todavía no hiciste ninguna predicción.")
+    else:
+        tabla_historial = pd.DataFrame(mis_predicciones)
+        tabla_historial["fecha"] = pd.to_datetime(tabla_historial["fecha"]).dt.strftime(
+            "%d/%m/%Y %H:%M"
+        )
+        tabla_historial["titulo"] = tabla_historial["titulo"].str[:80]
+        tabla_historial = tabla_historial[
+            ["fecha", "titulo", "autor", "tema", "n_afirmativo", "n_negativo", "n_abstencion"]
+        ]
+        tabla_historial.columns = [
+            "Fecha", "Proyecto", "Autor", "Tema", "AFIRMATIVO", "NEGATIVO", "ABSTENCIÓN",
+        ]
+        st.dataframe(tabla_historial, hide_index=True)

@@ -1,9 +1,12 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from api import database as db
 from api.schemas import DiputadoHistorial, DiputadoResumen
+from api.seguridad import usuario_actual
 
-router = APIRouter(prefix="/diputados", tags=["diputados"])
+router = APIRouter(
+    prefix="/diputados", tags=["diputados"], dependencies=[Depends(usuario_actual)]
+)
 
 
 @router.get("", response_model=list[DiputadoResumen])
